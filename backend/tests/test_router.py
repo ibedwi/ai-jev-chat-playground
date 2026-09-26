@@ -56,11 +56,11 @@ def test_slot_filling_asks_back_then_books():
     jev = ScriptedJev([
         {"intent": "schedule_meeting"},
         {"invite_jordan": 0.95},
-        {"turn": "answers"},
+        {"reply": "answers"},
         {"invite_jordan": 0.95, "day": "thursday", "time": "15:00"},
-        {"turn": "answers"},
+        {"reply": "answers"},
         {"invite_jordan": 0.95, "day": "thursday", "time": "16:00"},
-        {"turn": "confirm"},
+        {"reply": "confirm"},
     ])
     s = Session(jev, LLM())
     r = run(s, ["set up a call with Jordan", "thursday at 3pm", "make it 4 instead", "yes"])
@@ -69,16 +69,16 @@ def test_slot_filling_asks_back_then_books():
     assert "15:00" in r[1] and r[1].startswith("Book ")
     assert "16:00" in r[2]
     assert r[3].startswith("Booked:") and "Jordan" in r[3]
-    assert s.pending is None and len(s.meetings) == 1
+    assert s.draft is None and len(s.meetings) == 1
     assert s.meetings[0]["duration"] == 30  # default applied in code
 
 
 def test_confirm_not_offered_while_slots_missing():
-    jev = ScriptedJev([{"intent": "schedule_meeting"}, {}, {"turn": "answers"}, {}])
+    jev = ScriptedJev([{"intent": "schedule_meeting"}, {}, {"reply": "answers"}, {}])
     s = Session(jev, LLM())
     run(s, ["book a meeting", "hmm"])
-    follow_up_questions = jev.calls[2][1]
-    assert "confirm" not in follow_up_questions["turn"].criteria
+    reply_questions = jev.calls[2][1]
+    assert "confirm" not in reply_questions["reply"].criteria
 
 
 def test_low_confidence_slot_is_treated_as_missing():
@@ -95,20 +95,20 @@ def test_new_request_drops_draft_and_is_answered():
     jev = ScriptedJev([
         {"intent": "schedule_meeting"},
         {},
-        {"turn": "new_request"},
-        {"intent": "list_tasks"},
+        {"reply": "new_request"},
+        {"intent": "show_agenda"},
     ])
     s = Session(jev, LLM())
     r = run(s, ["schedule a meeting", "what are my tasks?"])
-    assert s.pending is None
-    assert r[1].startswith("(Dropped the meeting draft.)") and "Nothing yet." in r[1]
+    assert s.draft is None
+    assert r[1].startswith("(Dropped the Meeting Draft.)") and "Nothing yet." in r[1]
 
 
 def test_cancel():
-    jev = ScriptedJev([{"intent": "schedule_meeting"}, {}, {"turn": "cancel"}])
+    jev = ScriptedJev([{"intent": "schedule_meeting"}, {}, {"reply": "cancel"}])
     s = Session(jev, LLM())
     r = run(s, ["schedule a meeting", "never mind"])
-    assert r[1] == "OK, I've dropped that meeting." and s.pending is None
+    assert r[1] == "OK, I've dropped that meeting." and s.draft is None
 
 
 def test_low_confidence_intent_falls_back_to_llm():
@@ -145,9 +145,9 @@ def test_api_streams_events_then_reply(monkeypatch):
         assert kinds[-1] == "reply" and kinds.count("reply") == 1 and "event" in kinds
         sources = [l["event"]["source"] for l in lines if l["type"] == "event"]
         assert sources[0] == "USER" and "JEV" in sources
-        assert lines[-1]["state"]["pending"]["intent"] == "schedule_meeting"
+        assert lines[-1]["state"]["draft"]["intent"] == "schedule_meeting"
 
         client.post("/api/reset", json={"session_id": "t1"})
         with client.stream("POST", "/api/chat", json={"session_id": "t1", "message": "what are my tasks?"}) as r:
             last = [json.loads(l) for l in r.iter_lines() if l][-1]
-        assert last["content"] == "Nothing yet." and last["state"]["pending"] is None
+        assert last["content"] == "Nothing yet." and last["state"]["draft"] is None

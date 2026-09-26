@@ -18,7 +18,7 @@ export interface ChatMessage {
 export interface AppState {
   tasks: { title: string; priority: string; has_deadline: boolean }[]
   meetings: { attendees: string[]; date: string; time: string; duration: number }[]
-  pending: { intent: string; slots: Record<string, unknown>; awaiting: string } | null
+  draft: { intent: string; slots: Record<string, unknown>; awaiting: string } | null
 }
 
 export type StreamLine =

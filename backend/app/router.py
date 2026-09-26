@@ -1,7 +1,7 @@
 """Conversation logic: Jev routes, code decides, LLM fills in free text.
 
 Ported from the notebook. One `Session` holds one user's chat, tasks, meetings and any
-pending multi-turn command (slot filling).
+open Draft (slot filling).
 """
 
 from __future__ import annotations
@@ -16,16 +16,16 @@ from .jev import Answer, ChoiceQ, JevBackend, NoulQ, jev_call
 from .llm import LLM
 
 INTENTS = {
-    "create_task": "Create a to-do, reminder, or follow-up",
-    "list_tasks": "Show the current tasks, to-dos, or booked meetings",
+    "create_task": "Create a Task: something the user wants to remember to do",
+    "show_agenda": "Show the Agenda: the user's Tasks and Meetings",
     "schedule_meeting": "Book, schedule, or set up a meeting or call with people",
-    "search_notes": "Find or recall something from past meeting notes",
+    "search_meeting_notes": "Find or recall something from past Meeting Notes",
     "chat": "General conversation, questions, or anything else",
 }
 
 PRIORITIES = {"low": "Low priority", "normal": "Normal or unspecified", "high": "High or urgent"}
 
-NOTES = {
+MEETING_NOTES = {
     "n1": "Acme sales call: Jordan cares most about room double-booking; asked for pricing on 40 seats.",
     "n2": "Sprint 42 retro: releases were smooth; Supabase outage on Tuesday slowed QA.",
     "n3": "Q4 planning: choose between live action items and CRM sync for the meeting bot.",
@@ -69,7 +69,7 @@ ASK = {
 
 
 @dataclass
-class Pending:
+class Draft:
     intent: str
     transcript: list[str]
     slots: dict = field(default_factory=dict)
@@ -103,7 +103,7 @@ class Session:
         self.chat: list[dict] = []
         self.tasks: list[dict] = []
         self.meetings: list[dict] = []
-        self.pending: Pending | None = None
+        self.draft: Draft | None = None
         self.bus = EventBus()  # replaced per request
 
     # ---- entry point -------------------------------------------------------
@@ -127,11 +127,11 @@ class Session:
         return "\n".join(f"{m['role']}: {m['content']}" for m in self.chat[-n - 1 : -1])
 
     async def respond(self, msg: str) -> str:
-        if self.pending is not None:
-            return await self.continue_pending(msg)
+        if self.draft is not None:
+            return await self.continue_draft(msg)
 
         a = await self.ask(
-            "route command",
+            "classify intent",
             {"message": msg, "recent_conversation": self.recent_context()},
             {
                 "intent": ChoiceQ("What does the user want to do?", INTENTS),
@@ -143,12 +143,12 @@ class Session:
         if intent.confidence < config.CONFIDENCE_THRESHOLD:
             self.bus.emit("SYSTEM", "low confidence → LLM", f"{intent.choice} @ {intent.confidence:.2f}")
             return await self.handle_chat(msg, a)
-        self.bus.emit("SYSTEM", f"route → {intent.choice}")
+        self.bus.emit("SYSTEM", f"intent → {intent.choice}")
         handler = {
             "create_task": self.handle_create_task,
-            "list_tasks": self.handle_list_tasks,
+            "show_agenda": self.handle_show_agenda,
             "schedule_meeting": self.handle_schedule_meeting,
-            "search_notes": self.handle_search_notes,
+            "search_meeting_notes": self.handle_search_meeting_notes,
             "chat": self.handle_chat,
         }[intent.choice]
         return await handler(msg, a)
@@ -175,24 +175,24 @@ class Session:
         due = " (has a deadline; parse it in code)" if task["has_deadline"] else ""
         return f"Task created: {title} · priority {task['priority']}{due}"
 
-    async def handle_list_tasks(self, msg, a):
-        self.bus.emit("TOOL", "list_tasks", f"{len(self.tasks)} task(s), {len(self.meetings)} meeting(s)")
+    async def handle_show_agenda(self, msg, a):
+        self.bus.emit("TOOL", "show_agenda", f"{len(self.tasks)} task(s), {len(self.meetings)} meeting(s)")
         lines = [f"Task {i + 1}: {t['title']} ({t['priority']})" for i, t in enumerate(self.tasks)]
         lines += [f"Meeting: {describe_meeting(m)}" for m in self.meetings]
         return "\n".join(lines) or "Nothing yet."
 
-    async def handle_search_notes(self, msg, a):
+    async def handle_search_meeting_notes(self, msg, a):
         ans = await self.ask(
-            "pick best note",
+            "pick best Meeting Note",
             {"query": msg},
-            {"note": ChoiceQ("Which note best answers the query?", {**NOTES, "none": "No note is relevant"})},
+            {"meeting_note": ChoiceQ("Which Meeting Note best answers the query?", {**MEETING_NOTES, "none": "No Meeting Note is relevant"})},
         )
-        pick = ans["note"]
+        pick = ans["meeting_note"]
         if pick.choice == "none" or pick.confidence < config.CONFIDENCE_THRESHOLD:
-            self.bus.emit("TOOL", "search_notes", "no confident match")
-            return "I couldn't find a note that clearly matches."
-        self.bus.emit("TOOL", "search_notes", f"matched {pick.choice}")
-        return f"From your notes ({pick.choice}): {NOTES[pick.choice]}"
+            self.bus.emit("TOOL", "search_meeting_notes", "no confident match")
+            return "I couldn't find a Meeting Note that clearly matches."
+        self.bus.emit("TOOL", "search_meeting_notes", f"matched {pick.choice}")
+        return f"From your Meeting Notes ({pick.choice}): {MEETING_NOTES[pick.choice]}"
 
     async def handle_chat(self, msg, a):
         return await self.llm.complete(self.bus, self.chat[-10:])
@@ -209,7 +209,7 @@ class Session:
         )
         questions["duration"] = ChoiceQ("How long should the meeting be?", DURATIONS)
 
-        a = await self.ask("extract meeting slots", {"request_and_follow_ups": texts}, questions)
+        a = await self.ask("extract meeting slots", {"request_and_replies": texts}, questions)
 
         slots: dict = {}
         invited = [k for k in CONTACTS if (a[f"invite_{k}"].noul or 0) >= 0.5]
@@ -222,8 +222,8 @@ class Session:
                 slots[s] = ans.choice
         return slots
 
-    def draft(self) -> dict:
-        s = self.pending.slots
+    def proposed_meeting(self) -> dict:
+        s = self.draft.slots
         return {
             "attendees": s["attendees"],
             "date": resolve_day(s["day"]),
@@ -232,63 +232,63 @@ class Session:
         }
 
     async def fill_meeting(self) -> str:
-        p = self.pending
-        p.slots = {**p.slots, **await self.extract_meeting_slots(p.transcript)}
-        missing = [s for s in REQUIRED if s not in p.slots]
-        self.bus.emit("SYSTEM", "meeting draft", f"filled={p.slots}\nmissing={missing}")
+        d = self.draft
+        d.slots = {**d.slots, **await self.extract_meeting_slots(d.transcript)}
+        missing = [s for s in REQUIRED if s not in d.slots]
+        self.bus.emit("SYSTEM", "Meeting Draft", f"filled={d.slots}\nmissing={missing}")
 
         if missing:
-            p.awaiting = "slots"
-            p.last_question = " ".join(ASK[m] for m in missing)
-            return p.last_question
+            d.awaiting = "slots"
+            d.last_question = " ".join(ASK[m] for m in missing)
+            return d.last_question
 
-        p.awaiting = "confirm"
-        p.last_question = f"Book {describe_meeting(self.draft())}?"
-        return p.last_question + " (yes, change something, or cancel)"
+        d.awaiting = "confirm"
+        d.last_question = f"Book {describe_meeting(self.proposed_meeting())}?"
+        return d.last_question + " (yes, change something, or cancel)"
 
     def book_meeting(self) -> str:
-        m = self.draft()
+        m = self.proposed_meeting()
         self.meetings.append(m)
         self.bus.emit("TOOL", "create_meeting", str({**m, "date": m["date"].isoformat()}))
-        self.pending = None
+        self.draft = None
         return f"Booked: {describe_meeting(m)}"
 
     async def handle_schedule_meeting(self, msg, a):
-        self.pending = Pending(intent="schedule_meeting", transcript=[msg])
+        self.draft = Draft(intent="schedule_meeting", transcript=[msg])
         return await self.fill_meeting()
 
-    async def continue_pending(self, msg: str) -> str:
+    async def continue_draft(self, msg: str) -> str:
         options = {
             "answers": "Answers the assistant's question or adds or changes meeting details",
             "confirm": "Says yes or agrees to book the proposed meeting",
             "cancel": "Wants to stop or cancel scheduling this meeting",
             "new_request": "Asks for something unrelated to this meeting",
         }
-        if self.pending.awaiting == "slots":
+        if self.draft.awaiting == "slots":
             options.pop("confirm")
 
         a = await self.ask(
-            "classify follow-up",
-            {"assistant_asked": self.pending.last_question, "user_reply": msg},
-            {"turn": ChoiceQ("How does the user's reply relate to the pending meeting?", options)},
+            "classify reply",
+            {"assistant_asked": self.draft.last_question, "user_reply": msg},
+            {"reply": ChoiceQ("How does the user's Reply relate to the Meeting Draft?", options)},
         )
-        turn = a["turn"]
+        reply = a["reply"]
 
-        if turn.confidence < config.CONFIDENCE_THRESHOLD:
-            self.bus.emit("SYSTEM", "unclear follow-up", f"{turn.choice} @ {turn.confidence:.2f}")
-            return f"Sorry, I didn't catch that. {self.pending.last_question}"
-        if turn.choice == "cancel":
-            self.bus.emit("SYSTEM", "meeting draft cancelled")
-            self.pending = None
+        if reply.confidence < config.CONFIDENCE_THRESHOLD:
+            self.bus.emit("SYSTEM", "unclear reply", f"{reply.choice} @ {reply.confidence:.2f}")
+            return f"Sorry, I didn't catch that. {self.draft.last_question}"
+        if reply.choice == "cancel":
+            self.bus.emit("SYSTEM", "Meeting Draft cancelled")
+            self.draft = None
             return "OK, I've dropped that meeting."
-        if turn.choice == "new_request":
-            self.bus.emit("SYSTEM", "meeting draft dropped for new request")
-            self.pending = None
-            return "(Dropped the meeting draft.)\n" + await self.respond(msg)
-        if turn.choice == "confirm":
+        if reply.choice == "new_request":
+            self.bus.emit("SYSTEM", "Meeting Draft dropped for new request")
+            self.draft = None
+            return "(Dropped the Meeting Draft.)\n" + await self.respond(msg)
+        if reply.choice == "confirm":
             return self.book_meeting()
 
-        self.pending.transcript.append(msg)  # "answers": fill or change slots
+        self.draft.transcript.append(msg)  # "answers": fill or change slots
         return await self.fill_meeting()
 
     # ---- state for the UI --------------------------------------------------
@@ -297,11 +297,11 @@ class Session:
         return {
             "tasks": self.tasks,
             "meetings": [{**m, "date": m["date"].isoformat()} for m in self.meetings],
-            "pending": None
-            if self.pending is None
+            "draft": None
+            if self.draft is None
             else {
-                "intent": self.pending.intent,
-                "slots": self.pending.slots,
-                "awaiting": self.pending.awaiting,
+                "intent": self.draft.intent,
+                "slots": self.draft.slots,
+                "awaiting": self.draft.awaiting,
             },
         }

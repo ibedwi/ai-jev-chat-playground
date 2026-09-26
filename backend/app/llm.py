@@ -7,7 +7,7 @@ from .events import EventBus, timer
 
 SYSTEM_PROMPT = (
     "You are the assistant inside an AI notetaking app. Be concise. "
-    "The user can also run commands (create tasks, list tasks, schedule meetings, search notes), "
+    "The user can also ask the app to act (create a Task, show their Agenda, schedule a Meeting, search Meeting Notes), "
     "which the app handles itself; you handle general conversation and questions."
 )
 

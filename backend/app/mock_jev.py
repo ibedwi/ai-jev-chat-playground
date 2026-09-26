@@ -14,8 +14,8 @@ from .jev import Answer, ChoiceQ, NoulQ
 INTENT_KEYWORDS = {
     "schedule_meeting": ["meeting", "call with", "set up a call", "schedule", "book a", "sync with"],
     "create_task": ["remind", "todo", "to-do", "task to", "follow up", "add a task"],
-    "list_tasks": ["my tasks", "list tasks", "what are my", "show tasks", "agenda"],
-    "search_notes": ["notes", "what did", "recall", "last meeting", "remember when"],
+    "show_agenda": ["my tasks", "list tasks", "what are my", "show tasks", "agenda"],
+    "search_meeting_notes": ["notes", "what did", "recall", "last meeting", "remember when"],
 }
 YES = {"yes", "y", "yep", "yeah", "sure", "ok", "okay", "book it", "sounds good", "confirm"}
 CANCEL = ["cancel", "never mind", "nevermind", "forget it", "stop"]
@@ -27,7 +27,7 @@ def _text(state) -> str:
             "user_reply",
             "message",
             "query",
-            "request_and_follow_ups",
+            "request_and_replies",
         ]
         for key in preferred:
             if key in state:
@@ -62,7 +62,7 @@ def _choice(name: str, q: ChoiceQ, text: str) -> str:
             if intent in opts and any(w in text for w in words):
                 return intent
         return "chat"
-    if name == "turn":
+    if name == "reply":
         words = set(re.findall(r"[a-z']+", text))
         if "confirm" in opts and (text.strip(" .!") in YES or words & {"yes", "yep", "sure"}):
             return "confirm"
@@ -114,7 +114,7 @@ class MockJevBackend:
                     p = 0.5
                 answers[name] = Answer(noul=p)
             else:
-                pick = _note(q, text) if name == "note" else _choice(name, q, text)
+                pick = _note(q, text) if name == "meeting_note" else _choice(name, q, text)
                 answers[name] = Answer(choice=pick, confidence=0.9, probabilities={pick: 0.9})
         return answers, "MOCK (no API call)"
 

@@ -89,7 +89,7 @@ export default function App() {
     inputRef.current?.focus()
   }
 
-  const pending = appState?.pending
+  const draft = appState?.draft
 
   return (
     <div className="app">
@@ -129,9 +129,9 @@ export default function App() {
         <section className="pane events" aria-label="System events">
           <div className="events-head">
             <span>System events</span>
-            {pending && (
-              <span className="draft" title={JSON.stringify(pending.slots)}>
-                draft: {pending.intent} · {pending.awaiting === 'confirm' ? 'awaiting confirm' : 'filling slots'}
+            {draft && (
+              <span className="draft" title={JSON.stringify(draft.slots)}>
+                draft: {draft.intent} · {draft.awaiting === 'confirm' ? 'awaiting confirm' : 'filling slots'}
               </span>
             )}
           </div>
@@ -158,7 +158,7 @@ export default function App() {
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={pending ? 'Answer, change a detail, or cancel…' : 'Type a command…'}
+          placeholder={draft ? 'Answer, change a detail, or cancel…' : 'Type a message…'}
           disabled={busy}
           autoFocus
           aria-label="Chat input"
