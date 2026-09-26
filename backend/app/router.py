@@ -25,12 +25,48 @@ INTENTS = {
 
 PRIORITIES = {"low": "Low priority", "normal": "Normal or unspecified", "high": "High or urgent"}
 
-MEETING_NOTES = {
-    "n1": "Acme sales call: Jordan cares most about room double-booking; asked for pricing on 40 seats.",
-    "n2": "Sprint 42 retro: releases were smooth; Supabase outage on Tuesday slowed QA.",
-    "n3": "Q4 planning: choose between live action items and CRM sync for the meeting bot.",
-    "n4": "1:1 with Maya: discussed promo cycle and goals for next quarter.",
-}
+# Seeded past Meetings, one per user Agenda. Each carries exactly one Meeting Note, so
+# "what did we say about X?" resolves back to the Meeting the note belongs to (its title and
+# date). Dates are relative to today() so they always read as plausibly past. A Meeting booked
+# in the app has no note; adding notes to Meetings is out of scope.
+SEED_MEETINGS = [
+    {
+        "id": "acme",
+        "title": "Acme sales call with Jordan",
+        "attendees": ["jordan"],
+        "days_ago": 8,
+        "time": "10:00",
+        "duration": 45,
+        "note": "Jordan cares most about room double-booking; asked for pricing on 40 seats.",
+    },
+    {
+        "id": "retro",
+        "title": "Sprint 42 retro",
+        "attendees": ["sam", "maya", "priya"],
+        "days_ago": 5,
+        "time": "16:00",
+        "duration": 30,
+        "note": "Releases were smooth; a Supabase outage on Tuesday slowed QA.",
+    },
+    {
+        "id": "q4",
+        "title": "Q4 planning",
+        "attendees": ["maya", "priya"],
+        "days_ago": 14,
+        "time": "13:00",
+        "duration": 60,
+        "note": "Choose between live action items and CRM sync for the meeting bot.",
+    },
+    {
+        "id": "maya-1on1",
+        "title": "1:1 with Maya",
+        "attendees": ["maya"],
+        "days_ago": 12,
+        "time": "14:00",
+        "duration": 30,
+        "note": "Discussed the promo cycle and goals for next quarter.",
+    },
+]
 
 CONTACTS = {
     "sam": "Sam, engineer on the team",
@@ -101,7 +137,32 @@ def resolve_day(day: str) -> date:
 
 def describe_meeting(m: dict) -> str:
     who = ", ".join(n.capitalize() for n in m["attendees"])
-    return f"{m['date']:%a %d %b} at {m['time']} for {m['duration']} min with {who}"
+    when = f"{m['date']:%a %d %b} at {m['time']} for {m['duration']} min with {who}"
+    return f"{m['title']} — {when}" if m.get("title") else when
+
+
+def name_meeting(m: dict) -> str:
+    """How a Meeting is referred to in a search result, e.g. '1:1 with Maya on Mon 14 Sep'."""
+    label = m.get("title") or "meeting"
+    return f"{label} on {m['date']:%a %d %b}"
+
+
+def seeded_agenda() -> Agenda:
+    """A fresh Agenda pre-populated with the seeded past Meetings and their Meeting Notes."""
+    t = today()
+    meetings = [
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "attendees": list(s["attendees"]),
+            "date": t - timedelta(days=s["days_ago"]),
+            "time": s["time"],
+            "duration": s["duration"],
+            "note": s["note"],
+        }
+        for s in SEED_MEETINGS
+    ]
+    return Agenda(meetings=meetings)
 
 
 class Session:
@@ -197,17 +258,21 @@ class Session:
         return "\n".join(lines) or "Nothing yet."
 
     async def handle_search_meeting_notes(self, msg, a):
+        # Meeting Notes live on the Meetings they belong to; search only over Meetings that have one.
+        noted = [m for m in self.meetings if m.get("note")]
+        criteria = {m["id"]: f"{m['title']}: {m['note']}" for m in noted}
         ans = await self.ask(
             "pick best Meeting Note",
             {"query": msg},
-            {"meeting_note": ChoiceQ("Which Meeting Note best answers the query?", {**MEETING_NOTES, "none": "No Meeting Note is relevant"})},
+            {"meeting_note": ChoiceQ("Which Meeting Note best answers the query?", {**criteria, "none": "No Meeting Note is relevant"})},
         )
         pick = ans["meeting_note"]
         if pick.choice == "none" or pick.confidence < config.CONFIDENCE_THRESHOLD:
             self.bus.emit("TOOL", "search_meeting_notes", "no confident match")
             return "I couldn't find a Meeting Note that clearly matches."
+        m = next(m for m in noted if m["id"] == pick.choice)
         self.bus.emit("TOOL", "search_meeting_notes", f"matched {pick.choice}")
-        return f"From your Meeting Notes ({pick.choice}): {MEETING_NOTES[pick.choice]}"
+        return f"From your {name_meeting(m)}: {m['note']}"
 
     async def handle_chat(self, msg, a):
         return await self.llm.complete(self.bus, self.chat[-10:])
