@@ -1,0 +1,21 @@
+[project]
+name = "jev-chat-backend"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40",
+    "fastapi>=0.115",
+    "python-dotenv>=1.0",
+    "typesafe-sdk>=0.7.1",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

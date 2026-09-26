@@ -1,0 +1,269 @@
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --border: #e3e3e8;
+  --text: #1d1d22;
+  --muted: #6b6b76;
+  --user: #2563eb;
+  --user-text: #ffffff;
+  --bot: #eeeef2;
+  --jev: #7c3aed;
+  --llm: #2563eb;
+  --tool: #059669;
+  --system: #b45309;
+  --error: #dc2626;
+  --warn-bg: #fef3c7;
+  --warn-text: #92400e;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111114;
+    --surface: #1a1a1f;
+    --border: #2c2c33;
+    --text: #ececf1;
+    --muted: #9a9aa6;
+    --bot: #26262d;
+    --jev: #a78bfa;
+    --llm: #60a5fa;
+    --tool: #34d399;
+    --system: #fbbf24;
+    --error: #f87171;
+    --warn-bg: #3b2f12;
+    --warn-text: #fcd34d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: 12px 16px;
+  gap: 10px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.topbar h1 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.modes {
+  display: flex;
+  gap: 6px;
+}
+
+.pill {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.pill.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-color: transparent;
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 55fr 45fr;
+  gap: 10px;
+}
+
+.pane {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  line-height: 1.4;
+  font-size: 14px;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: var(--user);
+  color: var(--user-text);
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+  background: var(--bot);
+}
+
+.typing {
+  color: var(--muted);
+}
+
+.empty {
+  margin: auto 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--user);
+}
+
+.events-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.draft {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--system);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.event {
+  border-left: 3px solid var(--muted);
+  padding: 4px 10px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.event .src {
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.src-USER { border-color: var(--muted); }
+.src-JEV { border-color: var(--jev); }
+.src-JEV .src { color: var(--jev); }
+.src-LLM { border-color: var(--llm); }
+.src-LLM .src { color: var(--llm); }
+.src-TOOL { border-color: var(--tool); }
+.src-TOOL .src { color: var(--tool); }
+.src-SYSTEM { border-color: var(--system); }
+.src-SYSTEM .src { color: var(--system); }
+.src-ERROR { border-color: var(--error); }
+.src-ERROR .src { color: var(--error); }
+
+.event-title {
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.event-detail {
+  margin: 3px 0 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer input {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.composer input:focus {
+  outline: 2px solid var(--user);
+  outline-offset: -1px;
+}
+
+.composer button {
+  font: inherit;
+  font-size: 14px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--user);
+  background: var(--user);
+  color: #fff;
+  cursor: pointer;
+}
+
+.composer button.secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 720px) {
+  .panes {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}

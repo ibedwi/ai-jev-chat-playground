@@ -1,0 +1,24 @@
+# Repo-wide ignores. Stack-specific rules live in backend/.gitignore and frontend/.gitignore.
+
+# Secrets (keep the templates)
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Claude Code: per-user settings stay local; shared skills and settings are committed
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Logs
+*.log
