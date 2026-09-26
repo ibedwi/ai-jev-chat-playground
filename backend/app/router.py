@@ -121,7 +121,7 @@ class Draft:
     intent: str
     transcript: list[str]
     slots: dict = field(default_factory=dict)
-    awaiting: str = "slots"  # "slots" | "confirm"
+    awaiting: str = "slots"  # "slots" | "day" | "confirm"
     last_question: str = ""
 
 
@@ -157,6 +157,13 @@ def resolve_day(day: str) -> date:
         return t + timedelta(days=1)
     delta = (WEEKDAYS.index(day) - t.weekday()) % 7 or 7
     return t + timedelta(days=delta)
+
+
+def is_today_weekday(day: str) -> bool:
+    """True when `day` names the weekday that today falls on (in the app timezone). Such a
+    bare weekday is ambiguous — it could mean today or the same weekday next week — so the
+    Meeting Draft treats it as not yet settled and asks which. "today"/"tomorrow" never match."""
+    return day in WEEKDAYS and WEEKDAYS.index(day) == today().weekday()
 
 
 def describe_meeting(m: dict) -> str:
@@ -383,9 +390,55 @@ class Session:
             d.last_question = " ".join(ASK[m] for m in missing)
             return d.last_question
 
+        # A bare weekday that is also today is not settled: ask before proposing a date.
+        if is_today_weekday(d.slots["day"]):
+            return self.ask_which_weekday()
+
+        return self.confirm_prompt()
+
+    def confirm_prompt(self) -> str:
+        d = self.draft
         d.awaiting = "confirm"
         d.last_question = f"Book {describe_meeting(self.proposed_meeting())}?"
         return d.last_question + " (yes, change something, or cancel)"
+
+    def ask_which_weekday(self) -> str:
+        """The day names the weekday it is today — ambiguous between today and next week.
+        Ask which, naming both dates, and wait for the answer instead of booking."""
+        d = self.draft
+        weekday = d.slots["day"]  # stays on the Draft, unsettled, until the user answers
+        d.awaiting = "day"
+        t = today()
+        next_date = resolve_day(weekday)  # a weekday that is today resolves to next week
+        d.last_question = (
+            f"Did you mean today ({t:%a %d %b}) or next {weekday.capitalize()} ({next_date:%a %d %b})?"
+        )
+        self.bus.emit("SYSTEM", "Meeting Draft", f"{weekday} is today; asking which one")
+        return d.last_question
+
+    async def settle_day(self, msg: str) -> str:
+        """The user is answering which occurrence of an ambiguous weekday they meant. Reading
+        the Reply's day: "today" books today; naming no day ("next week") or repeating the same
+        weekday keeps it as the next occurrence; any other day changes the Slot."""
+        d = self.draft
+        unsettled = d.slots["day"]  # the ambiguous weekday, still recorded on the Draft
+        a = await self.ask(
+            "settle day",
+            {"assistant_asked": d.last_question, "user_reply": msg},
+            {"day": ChoiceQ("Which day does the reply pick? 'No day mentioned' means next week.", DAYS)},
+        )
+        ans = a["day"]
+        # A settled day is a Slot value, so it uses the same confidence bar as slot extraction:
+        # too unsure to read a day counts as no answer, and we ask again.
+        if ans.confidence < config.SLOT_CONFIDENCE:
+            self.bus.emit("SYSTEM", "unclear reply", f"{ans.choice} @ {ans.confidence:.2f}")
+            return f"Sorry, I didn't catch that. {d.last_question}"
+        # "No day mentioned" (e.g. "next week") keeps that weekday, which resolve_day maps to
+        # its next occurrence since it is today; any other day changes the Slot.
+        d.slots["day"] = unsettled if ans.choice == "unspecified" else ans.choice
+        self.bus.emit("SYSTEM", "Meeting Draft", f"day settled → {d.slots['day']}")
+        # The settled day means next week (never today again), so we can propose it directly.
+        return self.confirm_prompt()
 
     def book_meeting(self) -> str:
         m = self.proposed_meeting()
@@ -405,8 +458,8 @@ class Session:
             "cancel": "Wants to stop or cancel scheduling this meeting",
             "new_request": "Asks for something unrelated to this meeting",
         }
-        if self.draft.awaiting == "slots":
-            options.pop("confirm")
+        if self.draft.awaiting != "confirm":
+            options.pop("confirm")  # nothing to confirm until a meeting is proposed
 
         a = await self.ask(
             "classify reply",
@@ -429,6 +482,8 @@ class Session:
         if reply.choice == "confirm":
             return self.book_meeting()
 
+        if self.draft.awaiting == "day":
+            return await self.settle_day(msg)  # answering today-or-next-week
         self.draft.transcript.append(msg)  # "answers": fill or change slots
         return await self.fill_meeting()
 
