@@ -111,12 +111,78 @@ def test_cancel():
     assert r[1] == "OK, I've dropped that meeting." and s.draft is None
 
 
-def test_low_confidence_intent_falls_back_to_llm():
-    jev = ScriptedJev([{"intent": ("create_task", 0.3)}])
+def test_low_confidence_intent_asks_to_clarify_not_llm():
+    # An Unclear Message: Jev's likeliest Intent isn't chat, so the assistant suggests it
+    # and asks — it must not hand the message to the LLM.
+    jev = ScriptedJev([{"intent": ("schedule_meeting", 0.3)}])
     s = Session(jev, LLM())
-    (reply,) = run(s, ["hmm interesting"])
+    bus = EventBus()
+    reply = asyncio.run(s.handle("something about jordan", bus))
+
+    assert "schedule a meeting" in reply  # suggests the likeliest Intent
+    assert not reply.startswith("(fake LLM")  # the LLM was not called
+    assert "LLM" not in [e.source for e in bus.history]
+    assert s.tasks == [] and s.meetings == []
+    assert s.clarification is not None  # waiting to hear what the user meant
+
+
+def test_unclear_message_event_carries_intent_and_confidence():
+    jev = ScriptedJev([{"intent": ("schedule_meeting", 0.3)}])
+    s = Session(jev, LLM())
+    bus = EventBus()
+    asyncio.run(s.handle("uhh", bus))
+
+    unclear = next(e for e in bus.history if e.title == "Unclear Message")
+    assert "schedule_meeting" in unclear.detail and "0.30" in unclear.detail
+    assert "LLM" not in [e.source for e in bus.history]  # no LLM event for this turn
+
+
+def test_clarify_yes_runs_suggested_intent_on_original_message():
+    # "yes" carries the ORIGINAL message forward as the suggested Intent.
+    jev = ScriptedJev([
+        {"intent": ("create_task", 0.3)},
+        {"confirmed": 0.95},
+    ])
+    s = Session(jev, LLM())
+    r = run(s, ["the thing about emailing sam", "yes"])
+
+    assert "schedule a meeting" not in r[0] and "create a task" in r[0]
+    assert r[1].startswith("Task created:")
+    assert "emailing sam" in r[1]  # the original message, not "yes", became the Task
+    assert len(s.tasks) == 1 and s.clarification is None
+
+
+def test_clarify_different_request_routes_normally():
+    jev = ScriptedJev([
+        {"intent": ("create_task", 0.3)},
+        {"confirmed": 0.05},
+        {"intent": "show_agenda"},
+    ])
+    s = Session(jev, LLM())
+    r = run(s, ["mumble", "actually, what's on my agenda?"])
+
+    assert r[1] == "Nothing yet."  # routed as show_agenda, not as a Task
+    assert len(s.tasks) == 0 and s.clarification is None
+
+
+def test_low_confidence_chat_asks_open_question_without_suggesting():
+    # When the likeliest Intent is chat there's no action to suggest: ask an open question,
+    # still without calling the LLM.
+    jev = ScriptedJev([{"intent": ("chat", 0.3)}])
+    s = Session(jev, LLM())
+    bus = EventBus()
+    reply = asyncio.run(s.handle("asdf", bus))
+
+    assert "did you want to" not in reply.lower()  # no specific Intent suggested
+    assert "LLM" not in [e.source for e in bus.history]
+    assert s.clarification is None  # nothing to confirm; next message just routes normally
+
+
+def test_confident_chat_still_goes_to_the_llm():
+    jev = ScriptedJev([{"intent": ("chat", 0.9)}])
+    s = Session(jev, LLM())
+    (reply,) = run(s, ["how are you?"])
     assert reply.startswith("(fake LLM, chat)")
-    assert s.tasks == []
 
 
 def test_errors_become_events_not_crashes():

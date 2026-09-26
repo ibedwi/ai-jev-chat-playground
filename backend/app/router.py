@@ -103,6 +103,18 @@ ASK = {
     "time": "What time should it start?",
 }
 
+# When Jev isn't confident enough about the Intent, the message is an Unclear Message: we
+# don't guess and we don't hand it to the LLM. We name the likeliest action and ask, so a
+# "yes" can carry the original message forward. If the likeliest Intent is chat there's no
+# action to suggest, so we ask an open question instead.
+CLARIFY_ACTION = {
+    "create_task": "create a task",
+    "show_agenda": "show your agenda",
+    "schedule_meeting": "schedule a meeting",
+    "search_meeting_notes": "search your meeting notes",
+}
+CLARIFY_OPEN = "I'm not sure what you'd like to do. What can I help you with?"
+
 
 @dataclass
 class Draft:
@@ -111,6 +123,18 @@ class Draft:
     slots: dict = field(default_factory=dict)
     awaiting: str = "slots"  # "slots" | "confirm"
     last_question: str = ""
+
+
+@dataclass
+class Clarification:
+    """A pending Unclear Message. We suggested the likeliest Intent and are waiting to hear
+    whether that's what the user meant: a "yes" runs that Intent on the original message,
+    anything else is routed as a fresh request. The original classify-intent Answers are kept
+    so a "yes" needn't re-ask Jev."""
+
+    original_message: str
+    intent: str
+    answers: dict[str, Answer]
 
 
 @dataclass
@@ -172,6 +196,7 @@ class Session:
         self.agenda = agenda if agenda is not None else Agenda()
         self.chat: list[dict] = []
         self.draft: Draft | None = None
+        self.clarification: Clarification | None = None
         self.bus = EventBus()  # replaced per request
 
     @property
@@ -205,6 +230,8 @@ class Session:
     async def respond(self, msg: str) -> str:
         if self.draft is not None:
             return await self.continue_draft(msg)
+        if self.clarification is not None:
+            return await self.resolve_clarification(msg)
 
         a = await self.ask(
             "classify intent",
@@ -217,17 +244,51 @@ class Session:
         )
         intent = a["intent"]
         if intent.confidence < config.CONFIDENCE_THRESHOLD:
-            self.bus.emit("SYSTEM", "low confidence → LLM", f"{intent.choice} @ {intent.confidence:.2f}")
-            return await self.handle_chat(msg, a)
+            return await self.handle_unclear(msg, intent, a)
         self.bus.emit("SYSTEM", f"intent → {intent.choice}")
+        return await self.route_intent(intent.choice, msg, a)
+
+    async def route_intent(self, choice: str, msg: str, a: dict[str, Answer]) -> str:
         handler = {
             "create_task": self.handle_create_task,
             "show_agenda": self.handle_show_agenda,
             "schedule_meeting": self.handle_schedule_meeting,
             "search_meeting_notes": self.handle_search_meeting_notes,
             "chat": self.handle_chat,
-        }[intent.choice]
+        }[choice]
         return await handler(msg, a)
+
+    # ---- Unclear Message ---------------------------------------------------
+
+    async def handle_unclear(self, msg: str, intent: Answer, a: dict[str, Answer]) -> str:
+        """Jev's Confidence in the Intent is too low to act. Don't call the LLM: ask what the
+        user meant, suggesting the likeliest Intent (unless it's chat, which has no action)."""
+        self.bus.emit("SYSTEM", "Unclear Message", f"likeliest {intent.choice} @ {intent.confidence:.2f}")
+        if intent.choice == "chat":
+            # No action to suggest; ask an open question and route the next message normally.
+            return CLARIFY_OPEN
+        self.clarification = Clarification(original_message=msg, intent=intent.choice, answers=a)
+        return (
+            f"I'm not sure what you meant — did you want to {CLARIFY_ACTION[intent.choice]}? "
+            "(yes, or tell me what you need)"
+        )
+
+    async def resolve_clarification(self, msg: str) -> str:
+        c = self.clarification
+        a = await self.ask(
+            "clarify Unclear Message",
+            {"assistant_asked": f"Did you want to {CLARIFY_ACTION[c.intent]}?", "user_reply": msg},
+            {"confirmed": NoulQ(f"The user confirms they wanted to {CLARIFY_ACTION[c.intent]}")},
+        )
+        self.clarification = None
+        if (a["confirmed"].noul or 0) >= config.CONFIDENCE_THRESHOLD:
+            # "yes": carry the original message forward as the suggested Intent, reusing the
+            # Answers already extracted from it so we needn't re-ask Jev.
+            self.bus.emit("SYSTEM", f"Unclear Message resolved → {c.intent}")
+            return await self.route_intent(c.intent, c.original_message, c.answers)
+        # A different request abandons the suggestion and is routed normally.
+        self.bus.emit("SYSTEM", "Unclear Message dropped for new request")
+        return await self.respond(msg)
 
     # ---- simple handlers ---------------------------------------------------
 
