@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import config
 from .events import EventBus
 from .llm import LLM
-from .router import Agenda, Session
+from .router import Agenda, Session, seeded_agenda
 
 # The Agenda belongs to the user and outlives any Session; Sessions come and go with Clear.
 agendas: dict[str, Agenda] = {}
@@ -66,8 +66,9 @@ class ResetIn(BaseModel):
 
 
 def get_agenda(user_id: str) -> Agenda:
+    # A user's Agenda starts seeded with past Meetings (and their Meeting Notes) and outlives Sessions.
     if user_id not in agendas:
-        agendas[user_id] = Agenda()
+        agendas[user_id] = seeded_agenda()
     return agendas[user_id]
 
 

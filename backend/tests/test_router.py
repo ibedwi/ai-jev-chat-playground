@@ -12,7 +12,7 @@ from app import config
 from app.events import EventBus
 from app.jev import Answer, ChoiceQ, NoulQ
 from app.llm import LLM
-from app.router import Agenda, Session
+from app.router import SEED_MEETINGS, Agenda, Session, name_meeting, seeded_agenda, today
 
 
 class ScriptedJev:
@@ -168,6 +168,50 @@ def test_two_users_have_separate_agendas():
     assert len(alice.tasks) == 1 and len(bob.tasks) == 0
 
 
+def test_seeded_agenda_links_each_note_to_exactly_one_past_meeting():
+    agenda = seeded_agenda()
+    assert len(agenda.meetings) == len(SEED_MEETINGS)
+    # Every seeded Meeting has exactly one Meeting Note and a plausible past date.
+    assert all(m.get("note") for m in agenda.meetings)
+    assert all(m["date"] < today() for m in agenda.meetings)
+    # A note belongs to exactly one Meeting: ids are unique.
+    ids = [m["id"] for m in agenda.meetings]
+    assert len(set(ids)) == len(ids)
+
+
+def test_seeded_meetings_appear_on_the_agenda():
+    jev = ScriptedJev([{"intent": "show_agenda"}])
+    s = Session(jev, LLM(), seeded_agenda())
+    (reply,) = run(s, ["what's on my agenda?"])
+    assert reply.count("Meeting:") == len(SEED_MEETINGS)
+    assert "1:1 with Maya" in reply
+
+
+def test_search_reply_names_the_meeting_and_its_date():
+    agenda = seeded_agenda()
+    jev = ScriptedJev([
+        {"intent": "search_meeting_notes"},
+        {"meeting_note": "maya-1on1"},
+    ])
+    s = Session(jev, LLM(), agenda)
+    (reply,) = run(s, ["what did I discuss with Maya?"])
+
+    maya = next(m for m in agenda.meetings if m["id"] == "maya-1on1")
+    assert reply == f"From your {name_meeting(maya)}: {maya['note']}"
+    assert "1:1 with Maya" in reply  # names the Meeting
+    assert f"{maya['date']:%d %b}" in reply  # and its date
+
+
+def test_search_no_confident_match_still_replies_nothing_matches():
+    jev = ScriptedJev([
+        {"intent": "search_meeting_notes"},
+        {"meeting_note": ("none", 0.9)},
+    ])
+    s = Session(jev, LLM(), seeded_agenda())
+    (reply,) = run(s, ["what did we decide about llamas?"])
+    assert reply == "I couldn't find a Meeting Note that clearly matches."
+
+
 def test_agenda_survives_clear_across_the_api(monkeypatch):
     monkeypatch.setattr(config, "JEV_MODE", "mock")
     from fastapi.testclient import TestClient
@@ -180,11 +224,12 @@ def test_agenda_survives_clear_across_the_api(monkeypatch):
         ) as r:
             return [json.loads(l) for l in r.iter_lines() if l][-1]
 
+    seeded = len(SEED_MEETINGS)  # every Agenda starts with the seeded past Meetings
     with TestClient(app) as client:
         # Book a meeting and create a task in the first Session, then open a Draft.
         send(client, "s1", "set up a call with Jordan thursday at 3pm")
         booked = send(client, "s1", "yes")
-        assert len(booked["state"]["meetings"]) == 1
+        assert len(booked["state"]["meetings"]) == seeded + 1  # seeded + the one just booked
         tasked = send(client, "s1", "remind me to send Jordan the pricing")
         assert len(tasked["state"]["tasks"]) == 1
         drafting = send(client, "s1", "schedule another meeting")
@@ -193,16 +238,16 @@ def test_agenda_survives_clear_across_the_api(monkeypatch):
         # Clear ends the Session (and its Draft) but leaves the Agenda alone.
         client.post("/api/reset", json={"user_id": "u1", "session_id": "s1"})
         after = send(client, "s2", "what's on my agenda?")
-        assert len(after["state"]["meetings"]) == 1  # Meeting survived Clear
+        assert len(after["state"]["meetings"]) == seeded + 1  # booked Meeting survived Clear
         assert len(after["state"]["tasks"]) == 1  # Task survived Clear
         assert after["state"]["draft"] is None  # Draft did not
 
-        # A different user has a separate, empty Agenda.
+        # A different user has a separate Agenda: seeded, but without u1's booked Meeting.
         with client.stream(
             "POST", "/api/chat", json={"user_id": "u2", "session_id": "s3", "message": "what's on my agenda?"}
         ) as r:
             other = [json.loads(l) for l in r.iter_lines() if l][-1]
-        assert other["state"]["meetings"] == []
+        assert len(other["state"]["meetings"]) == seeded
 
 
 def test_api_streams_events_then_reply(monkeypatch):
@@ -224,4 +269,5 @@ def test_api_streams_events_then_reply(monkeypatch):
         client.post("/api/reset", json={"user_id": "tu1", "session_id": "t1"})
         with client.stream("POST", "/api/chat", json={"user_id": "tu1", "session_id": "t2", "message": "what are my tasks?"}) as r:
             last = [json.loads(l) for l in r.iter_lines() if l][-1]
-        assert last["content"] == "Nothing yet." and last["state"]["draft"] is None
+        # No Tasks yet, but the Agenda still lists the seeded past Meetings.
+        assert "Meeting:" in last["content"] and last["state"]["draft"] is None
