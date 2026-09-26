@@ -85,7 +85,7 @@ Click a suggestion chip, or type:
 6. `what are my tasks?`: pure code, no model call
 7. `what did Acme care about?`: two Jev calls, no LLM
 
-While a meeting draft is pending, the event pane header shows `draft: schedule_meeting · filling slots` or `awaiting confirm`.
+While a Meeting Draft is open, the event pane header shows `draft: schedule_meeting · filling slots` or `awaiting confirm`.
 
 ## 4. Run the tests
 
@@ -106,14 +106,14 @@ The tests use a scripted Jev, so they need no keys. They cover asking back, conf
 
 ```
 React ──POST /api/chat──► FastAPI ──► Session.handle()
-  ▲                          │           ├─ Jev: route command
-  │   NDJSON lines           │           ├─ Jev: extract slots / classify follow-up
+  ▲                          │           ├─ Jev: classify intent
+  │   NDJSON lines           │           ├─ Jev: extract slots / classify reply
   └──────────────────────────┘           ├─ LLM: task title or chat
      {"type":"event",...}  (as they happen)
      {"type":"reply",...}  (last line)
 ```
 
-`POST /api/chat` returns `application/x-ndjson`: one JSON object per line. Every `emit()` in the router goes onto an `asyncio.Queue`, and the streaming response forwards it right away. That's why the right-hand pane fills in while Jev and the LLM are still working. The last line is the assistant's reply plus a `state` snapshot (tasks, meetings, pending draft).
+`POST /api/chat` returns `application/x-ndjson`: one JSON object per line. Every `emit()` in the router goes onto an `asyncio.Queue`, and the streaming response forwards it right away. That's why the right-hand pane fills in while Jev and the LLM are still working. The last line is the assistant's reply plus a `state` snapshot (tasks, meetings, open Draft).
 
 NDJSON over `fetch` was chosen over SSE (`EventSource`) because `EventSource` only supports GET. With `fetch`, the message goes in a normal POST body. `src/api.ts` reads the body stream and splits on newlines.
 
@@ -129,14 +129,14 @@ NDJSON over `fetch` was chosen over SSE (`EventSource`) because `EventSource` on
 
 - **No state library.** Four `useState`s cover it: messages, events, app state, and busy.
 - **The input is disabled while a request runs.** This matches the per-session lock on the server.
-- **Clear starts a new session ID** and tells the server to drop the old one.
+- **Clear starts a new session ID** and tells the server to drop the old one. The user ID lives in `localStorage`, so it survives Clear and reloads — the user's Agenda stays with them across Sessions.
 
 ---
 
 ## Where to take it next
 
-- **Persistence.** Sessions live in memory and vanish on restart. Move `Session`'s lists to Postgres (Supabase) and keep only the pending draft in memory or Redis. Store every event too, so you can analyze Jev's confidence and latency across real conversations and tune thresholds on data.
+- **Persistence.** Agendas and Sessions live in memory and vanish on restart. Move the `Agenda` (Tasks and Meetings) to Postgres (Supabase) and keep only the Session's messages and open Draft in memory or Redis. Store every event too, so you can analyze Jev's confidence and latency across real conversations and tune thresholds on data.
 - **Stream LLM tokens.** Use `client.messages.stream(...)` and emit `{"type":"delta"}` lines so chat replies type out.
 - **Real calendar.** Replace `book_meeting()` with a Google Calendar call, and turn `CONTACTS` into the user's real contacts. Keep Jev's Noul-per-contact pattern, but only for a shortlist (for example, recent collaborators), since each contact is one question.
-- **Auth.** Session IDs are random UUIDs from the browser, which is fine locally. Put real auth in front before exposing it.
+- **Auth.** The user ID is a random UUID kept in the browser's `localStorage`, standing in for real auth so each browser gets its own Agenda. Put real auth in front before exposing it.
 - **Deploy.** Build the frontend (`npm run build`), serve `frontend/dist` from FastAPI or a CDN, and set `CORS_ORIGINS` if they're on different origins. If a reverse proxy sits in front, turn off response buffering for `/api/chat`. The response already sends `X-Accel-Buffering: no` for nginx.
