@@ -129,14 +129,14 @@ NDJSON over `fetch` was chosen over SSE (`EventSource`) because `EventSource` on
 
 - **No state library.** Four `useState`s cover it: messages, events, app state, and busy.
 - **The input is disabled while a request runs.** This matches the per-session lock on the server.
-- **Clear starts a new session ID** and tells the server to drop the old one.
+- **Clear starts a new session ID** and tells the server to drop the old one. The user ID lives in `localStorage`, so it survives Clear and reloads — the user's Agenda stays with them across Sessions.
 
 ---
 
 ## Where to take it next
 
-- **Persistence.** Sessions live in memory and vanish on restart. Move `Session`'s lists to Postgres (Supabase) and keep only the open Draft in memory or Redis. Store every event too, so you can analyze Jev's confidence and latency across real conversations and tune thresholds on data.
+- **Persistence.** Agendas and Sessions live in memory and vanish on restart. Move the `Agenda` (Tasks and Meetings) to Postgres (Supabase) and keep only the Session's messages and open Draft in memory or Redis. Store every event too, so you can analyze Jev's confidence and latency across real conversations and tune thresholds on data.
 - **Stream LLM tokens.** Use `client.messages.stream(...)` and emit `{"type":"delta"}` lines so chat replies type out.
 - **Real calendar.** Replace `book_meeting()` with a Google Calendar call, and turn `CONTACTS` into the user's real contacts. Keep Jev's Noul-per-contact pattern, but only for a shortlist (for example, recent collaborators), since each contact is one question.
-- **Auth.** Session IDs are random UUIDs from the browser, which is fine locally. Put real auth in front before exposing it.
+- **Auth.** The user ID is a random UUID kept in the browser's `localStorage`, standing in for real auth so each browser gets its own Agenda. Put real auth in front before exposing it.
 - **Deploy.** Build the frontend (`npm run build`), serve `frontend/dist` from FastAPI or a CDN, and set `CORS_ORIGINS` if they're on different origins. If a reverse proxy sits in front, turn off response buffering for `/api/chat`. The response already sends `X-Accel-Buffering: no` for nginx.

@@ -23,7 +23,21 @@ function newSessionId() {
   return crypto.randomUUID()
 }
 
+// The user ID stands in for real auth: it survives Clear and page reloads, so the
+// user's Agenda stays with them across Sessions. Clear only starts a new Session ID.
+const USER_ID_KEY = 'jev.userId'
+
+function stableUserId() {
+  let id = localStorage.getItem(USER_ID_KEY)
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem(USER_ID_KEY, id)
+  }
+  return id
+}
+
 export default function App() {
+  const [userId] = useState(stableUserId)
   const [sessionId, setSessionId] = useState(newSessionId)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [events, setEvents] = useState<SystemEvent[]>([])
@@ -54,7 +68,7 @@ export default function App() {
     setMessages((m) => [...m, { role: 'user', content: msg }])
 
     try {
-      for await (const line of streamChat(sessionId, msg)) {
+      for await (const line of streamChat(userId, sessionId, msg)) {
         if (line.type === 'event') {
           setEvents((e) => [...e, line.event])
         } else {
@@ -81,7 +95,7 @@ export default function App() {
   }
 
   async function clearAll() {
-    await resetSession(sessionId).catch(() => {})
+    await resetSession(userId, sessionId).catch(() => {})
     setSessionId(newSessionId())
     setMessages([])
     setEvents([])

@@ -77,6 +77,14 @@ class Draft:
     last_question: str = ""
 
 
+@dataclass
+class Agenda:
+    """All of a user's Tasks and Meetings. Belongs to the user and outlives any Session."""
+
+    tasks: list[dict] = field(default_factory=list)
+    meetings: list[dict] = field(default_factory=list)
+
+
 def today() -> date:
     return datetime.now(ZoneInfo(config.APP_TIMEZONE)).date()
 
@@ -97,14 +105,21 @@ def describe_meeting(m: dict) -> str:
 
 
 class Session:
-    def __init__(self, jev: JevBackend, llm: LLM) -> None:
+    def __init__(self, jev: JevBackend, llm: LLM, agenda: Agenda | None = None) -> None:
         self.jev = jev
         self.llm = llm
+        self.agenda = agenda if agenda is not None else Agenda()
         self.chat: list[dict] = []
-        self.tasks: list[dict] = []
-        self.meetings: list[dict] = []
         self.draft: Draft | None = None
         self.bus = EventBus()  # replaced per request
+
+    @property
+    def tasks(self) -> list[dict]:
+        return self.agenda.tasks
+
+    @property
+    def meetings(self) -> list[dict]:
+        return self.agenda.meetings
 
     # ---- entry point -------------------------------------------------------
 

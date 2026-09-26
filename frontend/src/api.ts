@@ -34,11 +34,15 @@ export interface Health {
  * POST a message and yield each NDJSON line as it arrives.
  * Events stream in while Jev and the LLM run; the final line is the reply.
  */
-export async function* streamChat(sessionId: string, message: string): AsyncGenerator<StreamLine> {
+export async function* streamChat(
+  userId: string,
+  sessionId: string,
+  message: string,
+): AsyncGenerator<StreamLine> {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message }),
+    body: JSON.stringify({ user_id: userId, session_id: sessionId, message }),
   })
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status}: ${await res.text()}`)
@@ -62,11 +66,11 @@ export async function* streamChat(sessionId: string, message: string): AsyncGene
   if (buffer.trim()) yield JSON.parse(buffer) as StreamLine
 }
 
-export async function resetSession(sessionId: string): Promise<void> {
+export async function resetSession(userId: string, sessionId: string): Promise<void> {
   await fetch('/api/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify({ user_id: userId, session_id: sessionId }),
   })
 }
 

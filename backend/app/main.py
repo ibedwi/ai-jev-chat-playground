@@ -1,10 +1,10 @@
 """FastAPI app: streams system events and the final reply as NDJSON.
 
-POST /api/chat   {"session_id": "...", "message": "..."}
+POST /api/chat   {"user_id": "...", "session_id": "...", "message": "..."}
   -> application/x-ndjson, one JSON object per line:
      {"type": "event", "event": {...}}   zero or more, as they happen
      {"type": "reply", "content": "...", "state": {...}}
-POST /api/reset  {"session_id": "..."}
+POST /api/reset  {"user_id": "...", "session_id": "..."}
 GET  /api/health
 """
 
@@ -22,8 +22,10 @@ from pydantic import BaseModel, Field
 from . import config
 from .events import EventBus
 from .llm import LLM
-from .router import Session
+from .router import Agenda, Session
 
+# The Agenda belongs to the user and outlives any Session; Sessions come and go with Clear.
+agendas: dict[str, Agenda] = {}
 sessions: dict[str, Session] = {}
 locks: dict[str, asyncio.Lock] = {}
 
@@ -53,17 +55,25 @@ app.add_middleware(
 
 
 class ChatIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=100)
     session_id: str = Field(min_length=1, max_length=100)
     message: str = Field(min_length=1, max_length=4000)
 
 
 class ResetIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=100)
     session_id: str = Field(min_length=1, max_length=100)
 
 
-def get_session(session_id: str) -> Session:
+def get_agenda(user_id: str) -> Agenda:
+    if user_id not in agendas:
+        agendas[user_id] = Agenda()
+    return agendas[user_id]
+
+
+def get_session(user_id: str, session_id: str) -> Session:
     if session_id not in sessions:
-        sessions[session_id] = Session(app.state.jev, app.state.llm)
+        sessions[session_id] = Session(app.state.jev, app.state.llm, get_agenda(user_id))
         locks[session_id] = asyncio.Lock()
     return sessions[session_id]
 
@@ -82,7 +92,7 @@ async def health():
 
 @app.post("/api/chat")
 async def chat(body: ChatIn):
-    session = get_session(body.session_id)
+    session = get_session(body.user_id, body.session_id)
     lock = locks[body.session_id]
     bus = EventBus()
 
@@ -111,6 +121,7 @@ async def chat(body: ChatIn):
 
 @app.post("/api/reset")
 async def reset(body: ResetIn):
+    # Clear ends the Session (dropping its messages and open Draft) but leaves the user's Agenda alone.
     sessions.pop(body.session_id, None)
     locks.pop(body.session_id, None)
     return {"ok": True}
