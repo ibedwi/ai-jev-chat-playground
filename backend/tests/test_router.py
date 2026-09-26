@@ -5,14 +5,25 @@ Run from backend/:  pytest -q
 
 import asyncio
 import json
+from datetime import date
 
 import pytest
 
-from app import config
+from app import config, router
 from app.events import EventBus
 from app.jev import Answer, ChoiceQ, NoulQ
 from app.llm import LLM
 from app.router import SEED_MEETINGS, Agenda, Session, name_meeting, seeded_agenda, today
+
+
+def pin_today(monkeypatch, iso):
+    """Pin today() so weekday-relative dates are deterministic. Needed wherever a test names
+    a bare weekday: whether it is 'today' depends on the real calendar otherwise."""
+    monkeypatch.setattr(router, "today", lambda: date.fromisoformat(iso))
+
+
+A_WEDNESDAY = "2026-09-30"  # "thursday" is tomorrow, never today
+A_THURSDAY = "2026-10-01"  # "thursday" is today; next thursday is 2026-10-08
 
 
 class ScriptedJev:
@@ -52,7 +63,8 @@ def run(session, msgs):
     return replies
 
 
-def test_slot_filling_asks_back_then_books():
+def test_slot_filling_asks_back_then_books(monkeypatch):
+    pin_today(monkeypatch, A_WEDNESDAY)  # "thursday" resolves to tomorrow, unambiguously
     jev = ScriptedJev([
         {"intent": "schedule_meeting"},
         {"invite_jordan": 0.95},
@@ -89,6 +101,101 @@ def test_low_confidence_slot_is_treated_as_missing():
     s = Session(jev, LLM())
     (reply,) = run(s, ["meeting with sam friday around 3ish"])
     assert reply == "What time should it start?"
+
+
+def test_bare_weekday_that_is_today_asks_which_one_naming_both_dates(monkeypatch):
+    # "Thursday" said on a Thursday is ambiguous: it could mean today or next Thursday. The
+    # Meeting Draft must ask which, naming both dates, instead of silently booking next week.
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "thursday", "time": "15:00"},
+    ])
+    s = Session(jev, LLM())
+    (reply,) = run(s, ["set up a call with Jordan thursday at 3pm"])
+
+    assert "today" in reply.lower() and "next thursday" in reply.lower()
+    assert "01 Oct" in reply and "08 Oct" in reply  # both dates named
+    assert s.draft is not None and s.draft.awaiting == "day"
+    assert s.meetings == []  # nothing booked yet
+
+
+def test_reply_today_books_today(monkeypatch):
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "thursday", "time": "15:00"},
+        {"reply": "answers"},
+        {"day": "today"},
+        {"reply": "confirm"},
+    ])
+    s = Session(jev, LLM())
+    r = run(s, ["set up a call with Jordan thursday at 3pm", "today", "yes"])
+
+    assert r[2].startswith("Booked:")
+    assert len(s.meetings) == 1 and s.meetings[0]["date"] == date(2026, 10, 1)
+
+
+def test_reply_next_week_books_seven_days_out(monkeypatch):
+    # "next week" names no specific day; on a Thursday it means next Thursday, seven days out.
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "thursday", "time": "15:00"},
+        {"reply": "answers"},
+        {"day": "unspecified"},
+        {"reply": "confirm"},
+    ])
+    s = Session(jev, LLM())
+    r = run(s, ["set up a call with Jordan thursday at 3pm", "next week", "yes"])
+
+    assert r[2].startswith("Booked:")
+    assert len(s.meetings) == 1 and s.meetings[0]["date"] == date(2026, 10, 8)
+
+
+def test_reply_with_a_different_day_during_disambiguation_changes_the_slot(monkeypatch):
+    # The Reply may change the day instead of picking today/next week; the Draft carries on to
+    # confirm with the new day, resolved to its own next occurrence.
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "thursday", "time": "15:00"},
+        {"reply": "answers"},
+        {"day": "monday"},
+    ])
+    s = Session(jev, LLM())
+    r = run(s, ["set up a call with Jordan thursday at 3pm", "actually make it Monday"])
+
+    assert r[1].startswith("Book ") and "05 Oct" in r[1]  # next Monday, not next Thursday
+    assert s.draft.awaiting == "confirm"
+
+
+def test_other_weekday_on_that_weekday_resolves_to_its_next_occurrence_without_asking(monkeypatch):
+    # "Friday" on a Thursday is unambiguous: it is tomorrow. No question, straight to confirm.
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "friday", "time": "15:00"},
+    ])
+    s = Session(jev, LLM())
+    (reply,) = run(s, ["set up a call with Jordan friday at 3pm"])
+
+    assert reply.startswith("Book ") and "02 Oct" in reply  # tomorrow
+    assert s.draft is not None and s.draft.awaiting == "confirm"
+
+
+def test_explicit_today_is_not_treated_as_ambiguous(monkeypatch):
+    # "today" and "tomorrow" are never ambiguous, even when today is the same weekday.
+    pin_today(monkeypatch, A_THURSDAY)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_jordan": 0.95, "day": "today", "time": "15:00"},
+    ])
+    s = Session(jev, LLM())
+    (reply,) = run(s, ["set up a call with Jordan today at 3pm"])
+
+    assert reply.startswith("Book ") and "01 Oct" in reply
+    assert s.draft.awaiting == "confirm"
 
 
 def test_new_request_drops_draft_and_is_answered():
@@ -197,7 +304,8 @@ def test_errors_become_events_not_crashes():
     assert any(e.source == "ERROR" and "jev down" in e.detail for e in bus.history)
 
 
-def test_agenda_is_shared_across_sessions_but_draft_is_not():
+def test_agenda_is_shared_across_sessions_but_draft_is_not(monkeypatch):
+    pin_today(monkeypatch, A_WEDNESDAY)  # "thursday" resolves to tomorrow, unambiguously
     agenda = Agenda()
     jev = ScriptedJev([
         {"intent": "schedule_meeting"},
@@ -280,6 +388,7 @@ def test_search_no_confident_match_still_replies_nothing_matches():
 
 def test_agenda_survives_clear_across_the_api(monkeypatch):
     monkeypatch.setattr(config, "JEV_MODE", "mock")
+    pin_today(monkeypatch, A_WEDNESDAY)  # "thursday at 3pm" resolves to tomorrow, unambiguously
     from fastapi.testclient import TestClient
 
     from app.main import app
