@@ -81,6 +81,32 @@ def test_confirm_not_offered_while_slots_missing():
     assert "confirm" not in follow_up_questions["turn"].criteria
 
 
+def test_attendee_added_only_when_noul_confidence_meets_threshold(monkeypatch):
+    monkeypatch.setattr(config, "NOUL_CONFIDENCE", 0.6)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        # sam is just above the threshold, jordan just below it.
+        {"invite_sam": 0.65, "invite_jordan": 0.55, "day": "thursday", "time": "15:00"},
+        {"turn": "confirm"},
+    ])
+    s = Session(jev, LLM())
+    run(s, ["set up a call thursday at 3pm", "yes"])
+    assert len(s.meetings) == 1
+    assert s.meetings[0]["attendees"] == ["sam"]
+
+
+def test_attendee_at_exactly_the_threshold_is_added(monkeypatch):
+    monkeypatch.setattr(config, "NOUL_CONFIDENCE", 0.6)
+    jev = ScriptedJev([
+        {"intent": "schedule_meeting"},
+        {"invite_sam": 0.6, "day": "thursday", "time": "15:00"},
+        {"turn": "confirm"},
+    ])
+    s = Session(jev, LLM())
+    run(s, ["set up a call thursday at 3pm", "yes"])
+    assert s.meetings[0]["attendees"] == ["sam"]
+
+
 def test_low_confidence_slot_is_treated_as_missing():
     jev = ScriptedJev([
         {"intent": "schedule_meeting"},

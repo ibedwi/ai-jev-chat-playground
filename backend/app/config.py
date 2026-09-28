@@ -19,6 +19,12 @@ LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-5")
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.6"))
 SLOT_CONFIDENCE = float(os.getenv("SLOT_CONFIDENCE", "0.5"))
+# A Noul Question is answered "yes" when its Confidence meets this threshold
+# (e.g. adding an attendee, or a task "having a deadline"). Kept as its own
+# setting rather than reusing SLOT_CONFIDENCE: a yes/no answer and a Choice Slot
+# are different decisions and may want to be tuned apart. Default stays 0.5 to
+# preserve the previous hardcoded behavior.
+NOUL_CONFIDENCE = float(os.getenv("NOUL_CONFIDENCE", "0.5"))
 
 # Timezone used to resolve "today" / "thursday" into dates.
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Jakarta")

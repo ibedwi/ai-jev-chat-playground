@@ -15,6 +15,15 @@ from .events import EventBus
 from .jev import Answer, ChoiceQ, JevBackend, NoulQ, jev_call
 from .llm import LLM
 
+def noul_is_yes(answer: Answer) -> bool:
+    """A Noul answer counts as "yes" when its Confidence meets the threshold (CONTEXT.md).
+
+    "Meets" is at-or-above (>=), so the two Noul decision sites (attendees and a
+    task's deadline) share one boundary rule.
+    """
+    return (answer.noul or 0) >= config.NOUL_CONFIDENCE
+
+
 INTENTS = {
     "create_task": "Create a to-do, reminder, or follow-up",
     "list_tasks": "Show the current tasks, to-dos, or booked meetings",
@@ -168,7 +177,7 @@ class Session:
         task = {
             "title": title,
             "priority": a["priority"].choice,
-            "has_deadline": (a["has_deadline"].noul or 0) > 0.5,
+            "has_deadline": noul_is_yes(a["has_deadline"]),
         }
         self.tasks.append(task)
         self.bus.emit("TOOL", "create_task", str(task))
@@ -212,7 +221,7 @@ class Session:
         a = await self.ask("extract meeting slots", {"request_and_follow_ups": texts}, questions)
 
         slots: dict = {}
-        invited = [k for k in CONTACTS if (a[f"invite_{k}"].noul or 0) >= 0.5]
+        invited = [k for k in CONTACTS if noul_is_yes(a[f"invite_{k}"])]
         if invited:
             slots["attendees"] = invited
         for s in ("day", "time", "duration"):
