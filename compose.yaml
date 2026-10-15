@@ -1,0 +1,33 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.6}
+      SLOT_CONFIDENCE: ${SLOT_CONFIDENCE:-0.5}
+      NOUL_CONFIDENCE: ${NOUL_CONFIDENCE:-0.5}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Jakarta}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      # Private by default; Tailscale Serve forwards to this port on the host.
+      - "127.0.0.1:8081:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
