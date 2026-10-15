@@ -140,3 +140,51 @@ NDJSON over `fetch` was chosen over SSE (`EventSource`) because `EventSource` on
 - **Real calendar.** Replace `book_meeting()` with a Google Calendar call, and turn `CONTACTS` into the user's real contacts. Keep Jev's Noul-per-contact pattern, but only for a shortlist (for example, recent collaborators), since each contact is one question.
 - **Auth.** The user ID is a random UUID kept in the browser's `localStorage`, standing in for real auth so each browser gets its own Agenda. Put real auth in front before exposing it.
 - **Deploy.** Build the frontend (`npm run build`), serve `frontend/dist` from FastAPI or a CDN, and set `CORS_ORIGINS` if they're on different origins. If a reverse proxy sits in front, turn off response buffering for `/api/chat`. The response already sends `X-Accel-Buffering: no` for nginx.
+
+## Deploy privately with Coolify
+
+The production setup in `compose.yaml` runs two services: FastAPI (`backend`)
+and Nginx (`web`). Nginx serves the compiled React app and proxies `/api/` to
+FastAPI with response buffering disabled so chat Events stream immediately.
+The backend is private to the Compose network. Only the frontend is published,
+bound to `127.0.0.1:8081` on the Docker host.
+
+1. In Coolify, create a project and select **New Resource → Public Repository**.
+2. Use `https://github.com/ibedwi/ai-jev-chat-playground` and choose the branch
+   containing these deployment files (`feat/coolify-deployment` until merged).
+3. Choose **Docker Compose**, base directory `/`, and Compose file `/compose.yaml`.
+4. Select the local Coolify server. Leave public domains unset; keep the
+   loopback port mapping in the Compose file.
+5. Optionally set `TYPESAFE_API_KEY` and `ANTHROPIC_API_KEY` in Coolify's runtime
+   environment variables. Blank keys use mock Jev and the fake LLM. Set
+   `LLM_MODEL` to a model available to your Anthropic account when adding a key.
+   No keys are needed for a first smoke test. Never put them in Git or build args.
+6. Deploy, then expose the loopback-only frontend through Tailscale Serve on
+   the host:
+
+   ```bash
+   sudo tailscale serve --bg --http=8081 http://127.0.0.1:8081
+   ```
+
+7. On a device connected to the same tailnet, open
+   `http://coolify.tail40954a.ts.net:8081`. Use the DNS hostname for the
+   Tailscale HTTP proxy. The dashboard stays on port 8000.
+
+The Tailscale listener is configured on the VM, separately from the Coolify
+application, and persists through application redeploys. No router forwarding
+or public domain is needed. The app has no authentication of its own: access
+is limited by your tailnet policy. Agendas and Sessions are held in memory and
+reset when the backend restarts; keep one backend replica and one Uvicorn
+worker until persistence is implemented.
+
+### Run the production containers without Coolify
+
+```bash
+# Optional: cp .env.example .env and add runtime keys.
+docker compose up --build -d --wait
+curl http://localhost:8081/api/health
+```
+
+Open `http://localhost:8081`. Use `docker compose down` to stop the stack.
+Dependency installs use `uv.lock` and `package-lock.json`. Docker build
+contexts exclude local environments, secrets, dependencies, and build output.
